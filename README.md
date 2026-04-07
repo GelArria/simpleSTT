@@ -4,7 +4,7 @@ A single floating button that wraps [whisper.cpp](https://github.com/ggml-org/wh
 
 Click the button or press **F9** → speak → your words are typed wherever your cursor is. That's it.
 
-No Electron, no frameworks, no bloat. ~3 MB binary, GPU-accelerated.
+No Electron, no frameworks, no bloat. ~3 MB binary and it can be GPU-accelerated primarly.
 
 And dont worry, this thing is vibecoded. i just wanted a button that takes my voice to type stuff asap. 
 
