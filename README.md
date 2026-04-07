@@ -1,4 +1,4 @@
-# simpleSTT
+# simpleSTT (simple-speech-to-text) button
 
 A single floating button that wraps [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (via [whisper-rs](https://github.com/tazz4843/whisper-rs)) to give you instant speech-to-text on Windows (Linux and Mac, especialy for mac its not tested yet).
 
