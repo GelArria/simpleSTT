@@ -5,21 +5,262 @@ mod injector;
 mod overlay;
 mod stt;
 
+use cpal::traits::{DeviceTrait as _, HostTrait as _};
 use log::{error, info, warn};
+use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 fn needs_space_before(text: &str) -> bool {
-    text.chars()
-        .rev()
-        .take_while(|c| c.is_whitespace())
-        .count()
-        == 0
+    text.chars().rev().take_while(|c| c.is_whitespace()).count() == 0
 }
 
 const HOTKEY_ID: u32 = 1;
+
+fn list_models() -> Vec<String> {
+    std::fs::read_dir("models")
+        .unwrap_or_else(|_| std::fs::read_dir(".").unwrap())
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "bin"))
+        .filter_map(|e| e.path().to_str().map(String::from))
+        .collect()
+}
+
+fn model_size_mb(path: &str) -> f64 {
+    std::fs::metadata(path)
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+        .unwrap_or(0.0)
+}
+
+fn select_model(configured: &str) -> Option<String> {
+    let models = list_models();
+    if models.is_empty() {
+        error!("no .bin models found in models/ directory - download one first");
+        return None;
+    }
+
+    if std::path::Path::new(configured).exists() && models.len() == 1 {
+        return Some(configured.to_string());
+    }
+
+    let configured_exists = std::path::Path::new(configured).exists();
+
+    println!("\n  Available models:");
+    println!("  ─────────────────────────────────────────────────");
+    for (i, m) in models.iter().enumerate() {
+        let size = model_size_mb(m);
+        let name = std::path::Path::new(m)
+            .file_name()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or("?");
+        let marker = if m == configured || (!configured_exists && i == 0) {
+            " (default)"
+        } else {
+            ""
+        };
+        println!("  [{}] {} ({:.0} MB){}", i + 1, name, size, marker);
+    }
+    println!("  ─────────────────────────────────────────────────");
+
+    let default_idx = if configured_exists {
+        models.iter().position(|m| m == configured).unwrap_or(0)
+    } else {
+        0
+    };
+
+    print!(
+        "\n  Select model [1-{}] (Enter for {}): ",
+        models.len(),
+        default_idx + 1
+    );
+    io::stdout().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let input = input.trim();
+
+    let idx = if input.is_empty() {
+        default_idx
+    } else {
+        match input.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= models.len() => n - 1,
+            _ => {
+                println!("  Invalid selection, using default.");
+                default_idx
+            }
+        }
+    };
+
+    let selected = models[idx].clone();
+    let name = std::path::Path::new(&selected)
+        .file_name()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or("?");
+    println!("  Selected: {}\n", name);
+    Some(selected)
+}
+
+fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    let mut devices: Vec<String> = Vec::new();
+    if let Ok(inputs) = host.input_devices() {
+        for d in inputs {
+            if let Ok(name) = d.name() {
+                if !audio::looks_like_loopback(&name) {
+                    devices.push(name);
+                }
+            }
+        }
+    }
+    devices
+}
+
+fn select_device(configured: &str) -> Option<String> {
+    let devices = list_input_devices();
+    if devices.is_empty() {
+        error!("no input devices found");
+        return None;
+    }
+
+    if devices.len() == 1 {
+        println!("  Microphone: {}", devices[0]);
+        return Some(devices[0].clone());
+    }
+
+    let default_device = cpal::default_host()
+        .default_input_device()
+        .and_then(|d| d.name().ok());
+
+    println!("  Input devices:");
+    println!("  ─────────────────────────────────────────────────");
+    for (i, name) in devices.iter().enumerate() {
+        let is_default = default_device.as_deref() == Some(name);
+        let is_configured =
+            name.to_lowercase().contains(&configured.to_lowercase()) && !configured.is_empty();
+        let marker = if is_configured {
+            " (configured)"
+        } else if is_default {
+            " (system default)"
+        } else {
+            ""
+        };
+        println!("  [{}] {}{}", i + 1, name, marker);
+    }
+    println!("  ─────────────────────────────────────────────────");
+
+    let default_idx = if !configured.is_empty() {
+        devices
+            .iter()
+            .position(|d| d.to_lowercase().contains(&configured.to_lowercase()))
+            .unwrap_or_else(|| {
+                devices
+                    .iter()
+                    .position(|d| default_device.as_deref() == Some(d))
+                    .unwrap_or(0)
+            })
+    } else {
+        devices
+            .iter()
+            .position(|d| default_device.as_deref() == Some(d))
+            .unwrap_or(0)
+    };
+
+    print!(
+        "\n  Select microphone [1-{}] (Enter for {}): ",
+        devices.len(),
+        default_idx + 1
+    );
+    io::stdout().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let input = input.trim();
+
+    let idx = if input.is_empty() {
+        default_idx
+    } else {
+        match input.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= devices.len() => n - 1,
+            _ => {
+                println!("  Invalid selection, using default.");
+                default_idx
+            }
+        }
+    };
+
+    println!("  Selected: {}\n", devices[idx]);
+    Some(devices[idx].clone())
+}
+
+fn select_mic_preset(configured: &str) -> Option<config::MicPreset> {
+    let presets = config::MicPreset::presets();
+    println!("  Microphone preset:");
+    println!("  ─────────────────────────────────────────────────");
+    for (i, p) in presets.iter().enumerate() {
+        let marker = if p.name.to_lowercase().contains(&configured.to_lowercase())
+            && !configured.is_empty()
+        {
+            " (configured)"
+        } else if i == 1 {
+            " (recommended)"
+        } else {
+            ""
+        };
+        println!("  [{}] {}{}", i + 1, p.name, marker);
+    }
+    println!("  ─────────────────────────────────────────────────");
+
+    let default_idx = if !configured.is_empty() {
+        presets
+            .iter()
+            .position(|p| p.name.to_lowercase().contains(&configured.to_lowercase()))
+            .unwrap_or(1)
+    } else {
+        1
+    };
+
+    print!(
+        "\n  Select preset [1-{}] (Enter for {}): ",
+        presets.len(),
+        default_idx + 1
+    );
+    io::stdout().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let input = input.trim();
+
+    let idx = if input.is_empty() {
+        default_idx
+    } else {
+        match input.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= presets.len() => n - 1,
+            _ => {
+                println!("  Invalid selection, using default.");
+                default_idx
+            }
+        }
+    };
+
+    println!("  Selected: {}\n", presets[idx].name);
+    Some(presets[idx].clone())
+}
+
+fn first_run_wizard() {
+    println!();
+    println!("  ╔══════════════════════════════════════════════════╗");
+    println!("  ║  Let's configure a few things (Enter = default): ║");
+    println!("  ║                                                  ║");
+    println!("  ║  Press F9 to start/stop recording.               ║");
+    println!("  ║  Speak naturally - pauses trigger transcription. ║");
+    println!("  ║  Text is typed directly into your active app.    ║");
+    println!("  ╚══════════════════════════════════════════════════╝");
+    println!();
+}
 
 fn main() {
     simplelog::SimpleLogger::init(simplelog::LevelFilter::Info, simplelog::Config::default())
@@ -27,16 +268,59 @@ fn main() {
 
     info!("simpleSTT starting...");
 
-    let config = config::AppConfig::load();
+    let mut config = config::AppConfig::load();
+    let is_first_run = config.first_run;
+
+    if is_first_run {
+        first_run_wizard();
+    }
+
+    let needs_model_select = is_first_run || !std::path::Path::new(&config.stt.model_path).exists();
+
+    if needs_model_select {
+        let model_path = match select_model(&config.stt.model_path) {
+            Some(p) => p,
+            None => std::process::exit(1),
+        };
+        if model_path != config.stt.model_path {
+            config.stt.model_path = model_path;
+            if let Err(e) = config.save() {
+                warn!("could not save config: {}", e);
+            }
+        }
+    }
+
+    if is_first_run {
+        let device_name = match select_device(&config.audio.preferred_input_device) {
+            Some(d) => d,
+            None => std::process::exit(1),
+        };
+        if device_name != config.audio.preferred_input_device {
+            config.audio.preferred_input_device = device_name;
+            if let Err(e) = config.save() {
+                warn!("could not save config: {}", e);
+            }
+        }
+    }
+
+    if is_first_run {
+        let mic_preset = match select_mic_preset(&config.mic_preset.name) {
+            Some(p) => p,
+            None => std::process::exit(1),
+        };
+        config.mic_preset = mic_preset;
+        config.stt.beam_size = config.mic_preset.beam_size;
+        config.stt.patience = config.mic_preset.patience;
+    }
 
     let stt = Arc::new(Mutex::new(None::<stt::SttEngine>));
     let recording = Arc::new(AtomicBool::new(false));
+    let running = Arc::new(AtomicBool::new(true));
 
     match stt::SttEngine::new(
         &config.stt.model_path,
         &config.stt.language,
-        config.stt.beam_size,
-        config.stt.patience,
+        config.mic_preset.clone(),
     ) {
         Ok(engine) => {
             *stt.lock().unwrap() = Some(engine);
@@ -44,14 +328,18 @@ fn main() {
         }
         Err(e) => {
             error!("failed to load STT engine: {}", e);
-            eprintln!("Error: failed to load whisper model from '{}': {}", config.stt.model_path, e);
-            eprintln!("Download a ggml model to the 'models/' directory.");
             std::process::exit(1);
         }
     }
 
+    config.first_run = false;
+    if let Err(e) = config.save() {
+        warn!("could not save config: {}", e);
+    }
+
     let stt_clone = stt.clone();
     let recording_clone = recording.clone();
+    let running_clone = running.clone();
     let last_text = Arc::new(Mutex::new(String::new()));
     let last_text_clone = last_text.clone();
     let mic_only = config.audio.microphone_only;
@@ -62,11 +350,11 @@ fn main() {
     };
     let worker_sleep_ms = config.audio.worker_sleep_ms.max(1);
 
-    thread::spawn(move || {
+    let worker = thread::spawn(move || {
         let mut audio_capture: Option<audio::AudioCapture> = None;
         let mut was_recording = false;
 
-        loop {
+        while running_clone.load(Ordering::SeqCst) {
             let is_recording = recording_clone.load(Ordering::SeqCst);
 
             if is_recording && !was_recording {
@@ -115,7 +403,9 @@ fn main() {
                                 let mut to_inject = String::new();
                                 {
                                     let last = last_text_clone.lock().unwrap();
-                                    if needs_space_before(&last) && !text.starts_with(char::is_whitespace) {
+                                    if needs_space_before(&last)
+                                        && !text.starts_with(char::is_whitespace)
+                                    {
                                         to_inject.push(' ');
                                     }
                                 }
@@ -141,7 +431,10 @@ fn main() {
             Some(h)
         }
         Err(e) => {
-            warn!("failed to register hotkey '{}': {}", config.hotkeys.start_stop, e);
+            warn!(
+                "failed to register hotkey '{}': {}",
+                config.hotkeys.start_stop, e
+            );
             None
         }
     };
@@ -151,13 +444,23 @@ fn main() {
         std::process::exit(1);
     }
 
-    info!("simpleSTT ready - press {} to toggle, speak naturally, pauses trigger transcription", config.hotkeys.start_stop);
+    info!(
+        "simpleSTT ready - press {} to toggle, speak naturally, pauses trigger transcription",
+        config.hotkeys.start_stop
+    );
 
     let result = overlay::run_message_loop();
+
+    info!("shutting down...");
+    recording.store(false, Ordering::SeqCst);
+    running.store(false, Ordering::SeqCst);
 
     if let Some(mut hk) = _hotkey {
         hk.unregister();
     }
+
+    let _ = worker.join();
+    info!("audio worker stopped");
 
     info!("simpleSTT exited with code {}", result);
 }

@@ -1,9 +1,9 @@
+use log::{error, info, warn};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT,
-    HOT_KEY_MODIFIERS,
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+    MOD_SHIFT, MOD_WIN,
 };
-use log::{error, info, warn};
 
 const VK_F1: u32 = 0x70;
 const VK_SPACE: u32 = 0x20;
@@ -85,7 +85,10 @@ impl GlobalHotkey {
             match RegisterHotKey(HWND::default(), id as i32, modifiers, vk) {
                 Ok(()) => {
                     info!("hotkey registered: {}", key_str);
-                    Ok(Self { id, registered: true })
+                    Ok(Self {
+                        id,
+                        registered: true,
+                    })
                 }
                 Err(e) => {
                     error!("RegisterHotKey failed: {}", e);
@@ -107,7 +110,6 @@ impl GlobalHotkey {
             self.registered = false;
         }
     }
-
 }
 
 impl Drop for GlobalHotkey {

@@ -30,7 +30,8 @@ impl AudioCapture {
         let consumer = Arc::new(Mutex::new(cons));
 
         let host = cpal::default_host();
-        let device = select_input_device(&host, microphone_only, preferred_input_device.as_deref())?;
+        let device =
+            select_input_device(&host, microphone_only, preferred_input_device.as_deref())?;
 
         let config = device
             .default_input_config()
@@ -158,7 +159,7 @@ impl AudioCapture {
     }
 }
 
-fn looks_like_loopback(name: &str) -> bool {
+pub fn looks_like_loopback(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.contains("stereo mix")
         || lower.contains("what u hear")
@@ -184,7 +185,9 @@ fn select_input_device(
         .map_err(|e| format!("failed to enumerate input devices: {}", e))?;
 
     for device in devices {
-        let name = device.name().unwrap_or_else(|_| String::from("unknown input"));
+        let name = device
+            .name()
+            .unwrap_or_else(|_| String::from("unknown input"));
         let loopback = looks_like_loopback(&name);
 
         if loopback {
@@ -214,7 +217,9 @@ fn select_input_device(
     }
 
     if let Some(device) = fallback {
-        let name = device.name().unwrap_or_else(|_| String::from("unknown input"));
+        let name = device
+            .name()
+            .unwrap_or_else(|_| String::from("unknown input"));
         warn!("falling back to loopback-like input device: {}", name);
         return Ok(device);
     }
@@ -297,7 +302,8 @@ fn build_stream_i16(
                             let mut mono = 0.0f32;
                             for ch in 0..src_channels as usize {
                                 let a = data[idx * src_channels as usize + ch] as f32 / 32768.0;
-                                let b = data[(idx + 1) * src_channels as usize + ch] as f32 / 32768.0;
+                                let b =
+                                    data[(idx + 1) * src_channels as usize + ch] as f32 / 32768.0;
                                 mono += a * (1.0 - frac) + b * frac;
                             }
                             mono /= src_channels as f32;

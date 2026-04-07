@@ -1,3 +1,4 @@
+use crate::config::MicPreset;
 use log::{error, info};
 use std::time::Instant;
 
@@ -18,8 +19,8 @@ fn detect_acceleration() -> AccelerationProbe {
     let vulkan_driver = std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
 
     let gpu_built = cfg!(feature = "cuda") || cfg!(feature = "vulkan");
-    let gpu_driver = (cfg!(feature = "cuda") && cuda_driver)
-        || (cfg!(feature = "vulkan") && vulkan_driver);
+    let gpu_driver =
+        (cfg!(feature = "cuda") && cuda_driver) || (cfg!(feature = "vulkan") && vulkan_driver);
     let use_gpu = gpu_built && gpu_driver;
 
     info!(
@@ -119,10 +120,12 @@ pub struct SttEngine {
     silence_frames_count: usize,
     min_speech_samples: usize,
     max_utterance_samples: usize,
+    no_speech_thold: f32,
+    entropy_thold: f32,
 }
 
 impl SttEngine {
-    pub fn new(model_path: &str, language: &str, beam_size: i32, patience: f32) -> Result<Self, String> {
+    pub fn new(model_path: &str, language: &str, preset: MicPreset) -> Result<Self, String> {
         info!("loading whisper model from {}", model_path);
         let accel = detect_acceleration();
         let mut params = whisper_rs::WhisperContextParameters::default();
@@ -144,14 +147,20 @@ impl SttEngine {
             buffer: Vec::new(),
             language: language.to_string(),
             n_threads,
-            beam_size: beam_size.max(1),
-            patience: if patience <= 0.0 { 1.0 } else { patience },
+            beam_size: preset.beam_size.max(1),
+            patience: if preset.patience <= 0.0 {
+                1.0
+            } else {
+                preset.patience
+            },
             vad_state: VadState::Idle,
-            energy_threshold: 0.02,
-            silence_frames_needed: 70,
+            energy_threshold: preset.energy_threshold,
+            silence_frames_needed: preset.silence_frames_needed,
             silence_frames_count: 0,
-            min_speech_samples: 16000 / 2,
+            min_speech_samples: preset.min_speech_samples,
             max_utterance_samples: 16000 * 30,
+            no_speech_thold: preset.no_speech_thold,
+            entropy_thold: preset.entropy_thold,
         })
     }
 
@@ -209,7 +218,11 @@ impl SttEngine {
 
     fn transcribe_buffer(&mut self) -> Option<String> {
         if self.buffer.len() < self.min_speech_samples {
-            info!("VAD: utterance too short ({} samples, need {}), skipping", self.buffer.len(), self.min_speech_samples);
+            info!(
+                "VAD: utterance too short ({} samples, need {}), skipping",
+                self.buffer.len(),
+                self.min_speech_samples
+            );
             self.buffer.clear();
             return None;
         }
@@ -236,8 +249,8 @@ impl SttEngine {
         params.set_temperature(0.0);
         params.set_temperature_inc(0.2);
         params.set_single_segment(false);
-        params.set_no_speech_thold(0.6);
-        params.set_entropy_thold(2.4);
+        params.set_no_speech_thold(self.no_speech_thold);
+        params.set_entropy_thold(self.entropy_thold);
 
         if self.language != "auto" {
             params.set_language(Some(&self.language));
@@ -296,11 +309,17 @@ impl SttEngine {
             return None;
         }
         if self.buffer.len() < self.min_speech_samples {
-            info!("flush: buffer too short ({} samples), skipping", self.buffer.len());
+            info!(
+                "flush: buffer too short ({} samples), skipping",
+                self.buffer.len()
+            );
             self.buffer.clear();
             return None;
         }
-        info!("flush: transcribing remaining buffer ({} samples)", self.buffer.len());
+        info!(
+            "flush: transcribing remaining buffer ({} samples)",
+            self.buffer.len()
+        );
         self.transcribe_buffer()
     }
 
@@ -309,5 +328,4 @@ impl SttEngine {
         self.vad_state = VadState::Idle;
         self.silence_frames_count = 0;
     }
-
 }

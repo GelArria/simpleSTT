@@ -1,11 +1,11 @@
+use log::info;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture};
-use log::info;
 
 const TIMER_ID: usize = 1;
 const ID_SETTINGS: usize = 1001;
@@ -97,7 +97,11 @@ fn toggle_overlay_state() {
 }
 
 fn make_colorref(r: i32, g: i32, b: i32) -> COLORREF {
-    COLORREF((b.max(0).min(255) as u32) << 16 | (g.max(0).min(255) as u32) << 8 | r.max(0).min(255) as u32)
+    COLORREF(
+        (b.max(0).min(255) as u32) << 16
+            | (g.max(0).min(255) as u32) << 8
+            | r.max(0).min(255) as u32,
+    )
 }
 
 fn draw_filled_rounded_rect(hdc: HDC, x: i32, y: i32, w: i32, h: i32, radius: i32, brush: HBRUSH) {
@@ -118,11 +122,7 @@ fn draw_rounded_border(hdc: HDC, x: i32, y: i32, w: i32, h: i32, radius: i32, br
     }
 }
 
-pub fn create_overlay(
-    opacity: u8,
-    size: u32,
-    recording: Arc<AtomicBool>,
-) -> Result<(), String> {
+pub fn create_overlay(opacity: u8, size: u32, recording: Arc<AtomicBool>) -> Result<(), String> {
     {
         let mut guard = get_inner().lock().unwrap();
         guard.size = if size > 0 { size } else { 48 };
@@ -261,7 +261,12 @@ extern "system" fn overlay_wndproc(
 
                 let (size_i32, state_val, phase, is_hover) = {
                     let guard = get_inner().lock().unwrap();
-                    (guard.size as i32, guard.state, guard.pulse_phase, guard.hover)
+                    (
+                        guard.size as i32,
+                        guard.state,
+                        guard.pulse_phase,
+                        guard.hover,
+                    )
                 };
 
                 let m = 3;
@@ -274,29 +279,25 @@ extern "system" fn overlay_wndproc(
                     let t = (0.5 + 0.5 * pulse) as f64;
 
                     let glow_size = inner + 8;
-                    let glow_color = make_colorref(
-                        (40.0 + 40.0 * t) as i32,
-                        10,
-                        10,
-                    );
+                    let glow_color = make_colorref((40.0 + 40.0 * t) as i32, 10, 10);
                     let glow_brush = CreateSolidBrush(glow_color);
-                    draw_filled_rounded_rect(hdc, m - 4, m - 4, glow_size + 8, glow_size + 8, 16, glow_brush);
+                    draw_filled_rounded_rect(
+                        hdc,
+                        m - 4,
+                        m - 4,
+                        glow_size + 8,
+                        glow_size + 8,
+                        16,
+                        glow_brush,
+                    );
                     let _ = DeleteObject(glow_brush);
 
-                    let bg_color = make_colorref(
-                        (170.0 + 50.0 * t) as i32,
-                        35,
-                        35,
-                    );
+                    let bg_color = make_colorref((170.0 + 50.0 * t) as i32, 35, 35);
                     let bg_brush = CreateSolidBrush(bg_color);
                     draw_filled_rounded_rect(hdc, m, m, inner, inner, 12, bg_brush);
                     let _ = DeleteObject(bg_brush);
 
-                    let border_color = make_colorref(
-                        (220.0 + 35.0 * t) as i32,
-                        80,
-                        80,
-                    );
+                    let border_color = make_colorref((220.0 + 35.0 * t) as i32, 80, 80);
                     let border_brush = CreateSolidBrush(border_color);
                     draw_rounded_border(hdc, m, m, inner, inner, 12, border_brush);
                     let _ = DeleteObject(border_brush);
@@ -310,7 +311,8 @@ extern "system" fn overlay_wndproc(
                     let _ = DeleteObject(bg_brush);
 
                     let border_val = if is_hover { 110 } else { 75 };
-                    let border_brush = CreateSolidBrush(make_colorref(border_val, border_val, border_val + 5));
+                    let border_brush =
+                        CreateSolidBrush(make_colorref(border_val, border_val, border_val + 5));
                     draw_rounded_border(hdc, m, m, inner, inner, 12, border_brush);
                     let _ = DeleteObject(border_brush);
 
@@ -340,7 +342,10 @@ extern "system" fn overlay_wndproc(
                 let _ = GetCursorPos(&mut pt);
                 let (dx, dy) = {
                     let guard = get_inner().lock().unwrap();
-                    ((pt.x - guard.click_pos.0).abs(), (pt.y - guard.click_pos.1).abs())
+                    (
+                        (pt.x - guard.click_pos.0).abs(),
+                        (pt.y - guard.click_pos.1).abs(),
+                    )
                 };
 
                 if dx < 5 && dy < 5 {
@@ -394,7 +399,12 @@ extern "system" fn overlay_wndproc(
                     Ok(m) => m,
                     Err(_) => return LRESULT(0),
                 };
-                let _ = AppendMenuW(hmenu, MF_STRING, ID_SETTINGS, windows::core::w!("Settings..."));
+                let _ = AppendMenuW(
+                    hmenu,
+                    MF_STRING,
+                    ID_SETTINGS,
+                    windows::core::w!("Settings..."),
+                );
                 let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
                 let _ = AppendMenuW(hmenu, MF_STRING, ID_QUIT, windows::core::w!("Quit"));
                 let _ = TrackPopupMenu(hmenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
